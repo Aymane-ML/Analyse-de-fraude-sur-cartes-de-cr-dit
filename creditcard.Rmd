@@ -1,0 +1,178 @@
+---
+title: "TP : SVM et Classe déséquilibrées"
+author: "Aymane Mimoun"
+date: "2024-04-22"
+output:
+  rmdformats::material:
+    fig_width: 10
+    fig_height: 10
+---
+
+```{r include=FALSE}
+library(e1071)
+library(ggplot2)
+library(caret)
+library(ROSE)
+```
+# Introduction
+Dans ce projet, nous abordons un défi commun en apprentissage automatique : le problème de classe déséquilibrée. Nous nous concentrons spécifiquement sur l'application de l'algorithme SVM (Support Vector Machine) à la détection de fraudes, un domaine où le déséquilibre de classe est souvent rencontré.
+
+Nous débuterons par une simulation de données illustrant le déséquilibre de classe. Ensuite, nous explorerons les implications théoriques de ce déséquilibre, avant d'examiner une solution.
+
+
+
+
+```{r include=FALSE}
+data<-read.csv("creditcard.csv", header=TRUE)
+df<-data[1:20000, ]
+```
+La variable de classe est transformée en facteur pour représenter les classes "fraude" et "non-fraude".
+```{r}
+head(df)
+df$Class <- as.factor(df$Class)
+X<-df[, paste0("V", 1:28)]
+y<-df$Class
+table(y)
+summary(y)
+```
+Un graphique est créé pour visualiser la répartition des montants de transactions en fonction de la classe.
+```{r}
+ggplot(data = df, aes(x = Time, y = Class)) +
+  geom_point(color = "skyblue") +
+  labs(x = "Montant de la transaction", y = "Classe", title = "Répartition des montants de transactions par classe")
+```
+Une inspection préliminaire des données révèle un déséquilibre marqué entre les classes, avec une grande majorité de transactions légitimes par rapport aux fraudes.
+
+# Un jeu de données déséquilibré
+Ensuite, les données sont divisées en ensembles d'entraînement et de test. Un modèle SVM est entraîné sur les données d'entraînement initiales.
+```{r}
+set.seed(12345)
+train_indices <- createDataPartition(df$Class, p = 0.8, list = FALSE)
+
+# Séparer les données en ensembles d'entraînement et de test
+X_train <- df[train_indices, -which(names(df) == "Class")]
+y_train <- df[train_indices, "Class"]
+X_test <- df[-train_indices, -which(names(df) == "Class")]
+y_test <- df[-train_indices, "Class"]
+
+model <- svm(Class ~ ., data = df[train_indices, ], kernel = "radial")
+model
+```
+Les prédictions sont effectuées sur l'ensemble de test et la performance du modèle est évaluée à l'aide d'une matrice de confusion.
+```{r}
+predictions <- predict(model, newdata = X_test)
+mat <- confusionMatrix(predictions, y_test)
+mat
+```
+Nous constatons que notre modèle a du mal à détecter les fraudes, avec un nombre significatif de transactions frauduleuses classées à tort comme légitimes. 
+
+On a 25% de de transaction frauduleuse classé comme légale, ce qui est très contraignant.
+
+
+# Explication théorique
+On peut observer le déséquilibre de classe en observant les probabilités liées à chaque classe dans un ensemble de données.
+
+Supposons que nous ayons un problème de classification binaire avec deux classes, positif (1) et négatif (0). Soit 
+$P(Y=1)$ la probabilité d'observation d'un exemple de la classe positive, et $P(Y=0)$ la probabilité d'observation d'un exemple de la classe négative. Dans un ensemble de données équilibré, ces probabilités seraient égales ou similaires, c'est-à-dire que $P(Y=1)\approx P(Y=0)$
+
+
+En présence d'un déséquilibre de classe, une classe peut être beaucoup plus fréquente que l'autre, ce qui implique que $P(Y=1)$ et $P(Y=0)$ sont très différents.
+
+Les algorithmes de classification sont confrontés à ce problème, car ils sont souvent influencés par la fréquence des classes lors de leur apprentissage. La plupart du temps, si une classe est beaucoup plus répandue que l'autre, le modèle peut avoir tendance à prédire cette classe majoritaire, ignorant ainsi la classe minoritaire.
+
+Une explication plus quantitative : 
+
+Le modèle va avoir tendance à prédire la classe majoritaire, on a donc un classifieur qui retournera toujours la classe majoritaire. Notons là la N-ème.
+
+Alors la probabilité : $ P(Y=y, c(X)=N)=P(Y=y)$ et donc le risque du déséquilibre se note : $R=\sum_{y=1}^{N}l(y, N)P(Y=y, c(X)=N)=\sum_{y=1}^{N}l(y, N)P(Y=y) \\ =\sum_{y=1}^{N} 1_{y\neq N}P(Y=y)=1-P(Y=N)$
+
+On remarque d'après le resultat que : $ P(Y=N)=1-R\approx 1$.
+Cela signifie essentiellement que le risque est proche de 1 lorsque la classe majoritaire est toujours prédite.
+
+# Solutions
+## Réequilibrage des données : sur-échantillonage
+
+Pour résoudre le problème de déséquilibre de classe, une technique de suréchantillonnage est utilisée avec la fonction ROSE.
+```{r}
+df_balanced <- ROSE::ROSE(Class ~ ., data = df[train_indices, ], seed = 12345)$data
+
+
+table(df_balanced$Class)
+
+
+train_indices_balanced <- createDataPartition(df_balanced$Class, p = 0.8, list = FALSE)
+
+X_train_balanced <- df_balanced[train_indices_balanced, -which(names(df_balanced) == "Class")]
+y_train_balanced <- df_balanced[train_indices_balanced, "Class"]
+X_test_balanced <- df_balanced[-train_indices_balanced, -which(names(df_balanced) == "Class")]
+y_test_balanced <- df_balanced[-train_indices_balanced, "Class"]
+
+```
+Le sur-échantillonage nous permet de rééquilibré les classes, les fraudes représente maintenant environ 50% des classes.
+
+On le verifie graphiquement :
+```{r}
+ggplot() +
+  geom_bar(data = df_balanced, aes(x = Class, fill = "Balanced"), position = "dodge") +
+  labs(title = "Distribution des classes avant et après le suréchantillonnage",
+       x = "Classe",
+       y = "Nombre d'observations") +
+  theme_minimal()
+```
+
+Un nouveau modèle SVM est entraîné sur les données équilibrées. Les prédictions sont effectuées sur l'ensemble de test équilibré et la performance est évaluée.
+```{r}
+new_model <- svm(Class ~ ., data = df_balanced[train_indices_balanced, ], kernel = "radial")
+
+new_predictions <- predict(new_model, newdata = X_test_balanced)
+mat <- confusionMatrix(new_predictions, y_test_balanced)
+mat
+```
+
+On remarque que l'on passe de 25% erreurs, à 1% d'erreur, ce qui est nettement plus precis. On remarque qu'il y a aussi plus de transaction légale classé en fraude, ce qui n'est pas si derangant que ca, car ce qui nous interesse sont les fraudes
+
+## Rééquilibrage par pondération
+Un autre modèle SVM est entraîné en utilisant la pondération de classe pour traiter le déséquilibre.
+```{r}
+model_final<-svm(Class ~ ., data = df_balanced[train_indices_balanced, ],
+                      kernel = "radial",
+                      class.weights = c("0" = 1, "1" = 2))
+
+predictions_final<-predict(model_final, newdata = X_test_balanced)
+mat_final<-confusionMatrix(predictions_final, y_test_balanced)
+mat_final
+```
+ Après avoir ajouté un poids de 2 pour la classe "fraude", nous avons observé une amélioration des performances du modèle.
+
+## Validation croisée
+Enfin, une validation croisée est effectuée pour sélectionner le meilleur modèle SVM.
+```{r}
+# Entraînement du modèle SVM avec validation croisée
+model_cv <- train(Class ~ ., data = df_balanced[train_indices_balanced, ],
+                  method = "svmRadial",
+                  trControl = trainControl(method = "cv", number = 5),
+                  class.weights = c("0" = 1, "1" = 2))
+
+# Affichage des résultats de la validation croisée
+print(model_cv)
+
+# Visualisation des performances
+plot(model_cv)
+
+```
+Le coût optimal a été déterminé graphiquement à l'aide de la validation croisée, et nous avons constaté que le modèle avec un coût de 1 présentait les meilleures performances.
+
+# Conclusion 
+Dans cette projet, nous avons examiné le problème du déséquilibre de classe dans le cadre de la détection de fraudes en utilisant l'algorithme SVM. À travers des simulations de données, nous avons visualisé et compris l'impact significatif du déséquilibre de classe sur la performance de l'algorithme SVM. En explorant les implications théoriques de ce problème, nous avons approfondi notre compréhension des problèmes rencontrés par les algorithmes de classification dans de telles situations.
+
+ce projet souligne l'importance de la gestion du déséquilibre de classe dans Machine Learning. En reconnaissant ce problème et en explorant des solutions appropriées, nous pouvons développer des modèles de classification plus robustes et plus efficaces.
+
+# References 
+https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud \\
+Apprentissage statistique Classification supervisée, Vincent Runge, (2024) \\
+https://lrouviere.github.io/INP-HB/cours_don_des.pdf \\
+https://towardsdatascience.com/the-complete-guide-to-support-vector-machine-svm-f1a820d8af0b
+
+
+
+
